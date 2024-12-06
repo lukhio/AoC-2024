@@ -5,13 +5,12 @@ use std::io::{ BufRead, BufReader };
 #[derive(Debug, Clone, Copy)]
 enum MultiplierState {
     Ignore,
-    CharM,
-    CharU,
-    CharL,
     LeftBracket,
     Digit,
     Comma,
-    RightBracket
+    RightBracket,
+    Operator,
+    Qualifier,
 }
 
 /// Provide the default value for `MultiplierState`
@@ -25,13 +24,12 @@ impl Default for MultiplierState {
 impl From<u8> for MultiplierState {
     fn from(val: u8) -> Self {
         match val {
-            1 => MultiplierState::CharM,
-            2 => MultiplierState::CharU,
-            3 => MultiplierState::CharL,
-            4 => MultiplierState::LeftBracket,
-            5 => MultiplierState::Digit,
-            6 => MultiplierState::Comma,
-            7 => MultiplierState::RightBracket,
+            1 => MultiplierState::Qualifier,
+            2 => MultiplierState::Operator,
+            3 => MultiplierState::LeftBracket,
+            4 => MultiplierState::Digit,
+            5 => MultiplierState::Comma,
+            6 => MultiplierState::RightBracket,
             _ => MultiplierState::Ignore
         }
     }
@@ -43,22 +41,28 @@ impl From<u8> for MultiplierState {
 /// that make a valid expression have an actual state.
 const STATES: [MultiplierState; 256] = {
     let mut array = [MultiplierState::Ignore; 256];
-    array[40]  = MultiplierState::LeftBracket;     // (
-    array[41]  = MultiplierState::RightBracket;     // )
-    array[44]  = MultiplierState::Comma;     // ,
-    array[48]  = MultiplierState::Digit;     // 0
-    array[49]  = MultiplierState::Digit;     // 1
-    array[50]  = MultiplierState::Digit;     // 2
-    array[51]  = MultiplierState::Digit;     // 3
-    array[52]  = MultiplierState::Digit;     // 4
-    array[53]  = MultiplierState::Digit;     // 5
-    array[54]  = MultiplierState::Digit;     // 6
-    array[55]  = MultiplierState::Digit;     // 7
-    array[56]  = MultiplierState::Digit;     // 8
-    array[57]  = MultiplierState::Digit;     // 9
-    array[109] = MultiplierState::CharM;     // m
-    array[117] = MultiplierState::CharU;     // u
-    array[108] = MultiplierState::CharL;     // l
+    array[39]  = MultiplierState::Qualifier;    // '
+    array[40]  = MultiplierState::LeftBracket;  // (
+    array[41]  = MultiplierState::RightBracket; // )
+    array[44]  = MultiplierState::Comma;        // ,
+    array[48]  = MultiplierState::Digit;        // 0
+    array[49]  = MultiplierState::Digit;        // 1
+    array[50]  = MultiplierState::Digit;        // 2
+    array[51]  = MultiplierState::Digit;        // 3
+    array[52]  = MultiplierState::Digit;        // 4
+    array[53]  = MultiplierState::Digit;        // 5
+    array[54]  = MultiplierState::Digit;        // 6
+    array[55]  = MultiplierState::Digit;        // 7
+    array[56]  = MultiplierState::Digit;        // 8
+    array[57]  = MultiplierState::Digit;        // 9
+    array[100] = MultiplierState::Qualifier;    // d
+    array[109] = MultiplierState::Operator;     // m
+    array[110] = MultiplierState::Qualifier;    // n
+    array[111] = MultiplierState::Qualifier;    // o
+    array[116] = MultiplierState::Qualifier;    // t
+    array[117] = MultiplierState::Operator;     // u
+    array[108] = MultiplierState::Operator;     // l
+
     array
 };
 
@@ -68,16 +72,42 @@ const STATES: [MultiplierState; 256] = {
 /// part of a valid expression, we need to update
 /// the machine's internal state. This table holds
 /// the transitions between two states.
-const TRANSITIONS: [[u8; 8]; 8] = [
-    [0, 1, 0, 0, 0, 0, 0, 0],
-    [0, 0, 2, 0, 0, 0, 0, 0],
-    [0, 0, 0, 3, 0, 0, 0, 0],
-    [0, 0, 0, 0, 4, 0, 0, 0],
-    [0, 0, 0, 0, 0, 5, 0, 0],
-    [0, 0, 0, 0, 0, 5, 6, 7],
-    [0, 0, 0, 0, 0, 5, 0, 0],
-    [0, 1, 0, 0, 0, 0, 0, 0],
-];
+const TRANSITIONS: [[MultiplierState; 8]; 8] = {
+    let mut array = [
+        [MultiplierState::Ignore; 8],
+        [MultiplierState::Ignore; 8],
+        [MultiplierState::Ignore; 8],
+        [MultiplierState::Ignore; 8],
+        [MultiplierState::Ignore; 8],
+        [MultiplierState::Ignore; 8],
+        [MultiplierState::Ignore; 8],
+        [MultiplierState::Ignore; 8],
+    ];
+
+    array[MultiplierState::Ignore as usize]
+         [MultiplierState::Operator as usize] = MultiplierState::Operator;
+
+    array[MultiplierState::Operator as usize]
+         [MultiplierState::Operator as usize] = MultiplierState::Operator;
+    array[MultiplierState::Operator as usize]
+         [MultiplierState::LeftBracket as usize] = MultiplierState::LeftBracket;
+
+    array[MultiplierState::LeftBracket as usize]
+         [MultiplierState::Digit as usize] = MultiplierState::Digit;
+
+    array[MultiplierState::Digit as usize]
+         [MultiplierState::Digit as usize] = MultiplierState::Digit;
+    array[MultiplierState::Digit as usize]
+         [MultiplierState::Comma as usize] = MultiplierState::Comma;
+    array[MultiplierState::Digit as usize]
+         [MultiplierState::RightBracket as usize] = MultiplierState::RightBracket;
+
+    array[MultiplierState::Comma as usize]
+         [MultiplierState::Digit as usize] = MultiplierState::Digit;
+
+    array
+};
+
 
 /// State machine
 ///
@@ -85,12 +115,27 @@ const TRANSITIONS: [[u8; 8]; 8] = [
 /// internal state, two operands that will be
 /// multiplied together, and if there was a comma
 /// in the current expression.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Multiplier {
     state: MultiplierState,
+    enabled: bool,
+    operator: Vec<char>,
     first_operand: u64,
     second_operand: u64,
     seen_comma: bool,
+}
+
+impl Default for Multiplier {
+    fn default() -> Self {
+        Self {
+            state: MultiplierState::Ignore,
+            first_operand: 0,
+            operator: Vec::new(),
+            second_operand: 0,
+            seen_comma: false,
+            enabled: true,
+        }
+    }
 }
 
 impl Multiplier {
@@ -131,6 +176,7 @@ impl Multiplier {
     /// the default valiues.
     fn clear(&mut self) {
         self.state = MultiplierState::Ignore;
+        self.operator.clear();
         self.first_operand = 0;
         self.second_operand = 0;
         self.seen_comma = false;
@@ -156,12 +202,23 @@ fn parse(line: &str) -> u64 {
         let byte_state = STATES[*byte as usize] as usize;
 
         // Update the machine's internal state
-        machine.state = TRANSITIONS[machine.state as usize][byte_state].into();
+        machine.state = TRANSITIONS[machine.state as usize][byte_state];
 
         // Depending on the new state, we might need to take some action
         match machine.state {
             // Initial state, we reset the machine
             MultiplierState::Ignore => { machine.clear(); },
+            // Operator state, if we transition from `Ignore` we save
+            // the bytes to ensure we have the full operator
+            MultiplierState::Operator => { machine.operator.push(*byte as char); },
+            // When we have an opening bracket we need to check that
+            // we have a valid operator. If not we reset the whole machine.
+            // Here we have only one valid operator so this is easy.
+            MultiplierState::LeftBracket => {
+                if machine.operator != vec!['m', 'u', 'l'] {
+                    machine.clear();
+                }
+            },
             // We have a valid expression so far and `byte`
             // is a digit: we store it in the state machine
             MultiplierState::Digit => { machine.update_operand(*byte as char); },
@@ -217,7 +274,13 @@ mod tests {
     }
 
     #[test]
-    fn test_part1_no_invalid() {
+    fn test_part1_basic() {
+        let test = "mul(2,4)";
+        assert_eq!(parse(test), 8);
+    }
+
+    #[test]
+    fn test_part1_no_valid() {
         let test = "xmul(2,4%&mul[3,7]!@^do_not_mul5,5)+mul(3264]then(ul(11,8)mul(85))";
         assert_eq!(parse(test), 0);
     }
