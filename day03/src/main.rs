@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{ BufRead, BufReader };
 
 /// Possible states for `Multiplier` state machine
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum MultiplierState {
     Ignore,
     LeftBracket,
@@ -86,14 +86,23 @@ const TRANSITIONS: [[MultiplierState; 8]; 8] = {
 
     array[MultiplierState::Ignore as usize]
          [MultiplierState::Operator as usize] = MultiplierState::Operator;
+    array[MultiplierState::Ignore as usize]
+         [MultiplierState::Qualifier as usize] = MultiplierState::Qualifier;
 
     array[MultiplierState::Operator as usize]
          [MultiplierState::Operator as usize] = MultiplierState::Operator;
     array[MultiplierState::Operator as usize]
          [MultiplierState::LeftBracket as usize] = MultiplierState::LeftBracket;
 
+    array[MultiplierState::Qualifier as usize]
+         [MultiplierState::Qualifier as usize] = MultiplierState::Qualifier;
+    array[MultiplierState::Qualifier as usize]
+         [MultiplierState::LeftBracket as usize] = MultiplierState::LeftBracket;
+
     array[MultiplierState::LeftBracket as usize]
          [MultiplierState::Digit as usize] = MultiplierState::Digit;
+    array[MultiplierState::LeftBracket as usize]
+         [MultiplierState::RightBracket as usize] = MultiplierState::RightBracket;
 
     array[MultiplierState::Digit as usize]
          [MultiplierState::Digit as usize] = MultiplierState::Digit;
@@ -120,6 +129,8 @@ struct Multiplier {
     state: MultiplierState,
     enabled: bool,
     operator: Vec<char>,
+    valid_operator: bool,
+    qualifier: Vec<char>,
     first_operand: u64,
     second_operand: u64,
     seen_comma: bool,
@@ -131,6 +142,8 @@ impl Default for Multiplier {
             state: MultiplierState::Ignore,
             first_operand: 0,
             operator: Vec::new(),
+            valid_operator: false,
+            qualifier: Vec::new(),
             second_operand: 0,
             seen_comma: false,
             enabled: true,
@@ -159,12 +172,41 @@ impl Multiplier {
         }
     }
 
+    /// Ensure the operator we have is valid
+    /// For this problem we have only one operator but this
+    /// functions makes it easier to add new operators.
+    fn is_operator_valid(&mut self) -> bool {
+        if self.operator == vec!['m', 'u', 'l'] {
+            self.valid_operator = true;
+        }
+
+        self.valid_operator
+    }
+
+    /// Ensure the qualifier we have is valid
+    fn is_qualifier_valid(&self) -> bool {
+        match self.qualifier.iter().collect::<String>().as_str() {
+            "do" | "dont't" => {
+                return true;
+            },
+            _ => {
+                return false;
+            }
+        }
+    }
+
     /// Multiply the two operands together
     ///
     /// This function is called after fully parsing a valid
     /// expression, including the closing parenthesis.
-    fn compute(&self) -> u64 {
-        self.first_operand * self.second_operand
+    fn compute(&mut self) -> Option<u64> {
+        if self.enabled && self.seen_comma && self.is_operator_valid() {
+            println!("---> compute (new result {:?})", Some(self.first_operand * self.second_operand));
+            return Some(self.first_operand * self.second_operand)
+        }
+
+        println!("---> not computing");
+        None
     }
 
     /// Clear the internal state
@@ -177,6 +219,8 @@ impl Multiplier {
     fn clear(&mut self) {
         self.state = MultiplierState::Ignore;
         self.operator.clear();
+        self.valid_operator = false;
+        self.qualifier.clear();
         self.first_operand = 0;
         self.second_operand = 0;
         self.seen_comma = false;
@@ -201,22 +245,54 @@ fn parse(line: &str) -> u64 {
         // Get the state for the burrent byte
         let byte_state = STATES[*byte as usize] as usize;
 
+        // Save previous state
+        let previous_state = machine.state;
+
         // Update the machine's internal state
         machine.state = TRANSITIONS[machine.state as usize][byte_state];
+
+        println!("byte: {} {byte_state:?} ({})", *byte as char, *byte as usize);
+        println!("new state: {:?}", machine.state);
+        // println!("machine: enabled ({}) seen comma ({})", machine.enabled, machine.seen_comma);
+        println!("{machine:#?}");
+        println!("------------------------------");
+
+        // If the machine is disabled, we don't bother checking the state
 
         // Depending on the new state, we might need to take some action
         match machine.state {
             // Initial state, we reset the machine
             MultiplierState::Ignore => { machine.clear(); },
-            // Operator state, if we transition from `Ignore` we save
-            // the bytes to ensure we have the full operator
-            MultiplierState::Operator => { machine.operator.push(*byte as char); },
-            // When we have an opening bracket we need to check that
-            // we have a valid operator. If not we reset the whole machine.
-            // Here we have only one valid operator so this is easy.
-            MultiplierState::LeftBracket => {
-                if machine.operator != vec!['m', 'u', 'l'] {
+            // Operator state, we save the bytes to ensure we have the full operator
+            MultiplierState::Operator => {
+                if previous_state == MultiplierState::Qualifier {
                     machine.clear();
+                }
+                machine.operator.push(*byte as char);
+            },
+            // Qualifier state, we save the bytes to ensure we have the full qualifier
+            MultiplierState::Qualifier => {
+                if previous_state == MultiplierState::Operator {
+                    machine.clear();
+                }
+                machine.qualifier.push(*byte as char);
+            },
+            // When we have an opening bracket we need to check that
+            // we have a valid operator or that we are parsing a qualifier.
+            // If not we reset the whole machine.
+            MultiplierState::LeftBracket => {
+                match previous_state {
+                    MultiplierState::Operator => {
+                        if ! machine.is_operator_valid() {
+                            machine.clear();
+                        }
+                    },
+                    MultiplierState::Qualifier => {
+                        if ! machine.is_qualifier_valid() {
+                            machine.clear();
+                        }
+                    },
+                    _ => { machine.clear(); },
                 }
             },
             // We have a valid expression so far and `byte`
@@ -224,15 +300,40 @@ fn parse(line: &str) -> u64 {
             MultiplierState::Digit => { machine.update_operand(*byte as char); },
             // We have a valid expression so far and `byte`
             // is a comma: we let the machine know
-            MultiplierState::Comma => { machine.seen_comma = true; },
-            // Comlete valid expression, we can compute
-            // the result and add it to the accumulator
+            MultiplierState::Comma => {
+                println!("COMMA {}", machine.is_operator_valid());
+                if machine.is_operator_valid() {
+                    machine.seen_comma = true;
+                } else {
+                    machine.clear();
+                }
+            },
+            // Comlete valid expression or operator, we can compute
+            // the result and add it to the accumulator, or change
+            // the machine `enabled` status.
             MultiplierState::RightBracket => {
-                result += machine.compute();
+                match previous_state {
+                    MultiplierState::LeftBracket => {
+                        match machine.qualifier.iter().collect::<String>().as_str() {
+                            "do" => {
+                                println!("---> enabling machine");
+                                machine.enabled = true;
+                            },
+                            "don't" => {
+                                println!("---> disabling machine");
+                                machine.enabled = false;
+                            },
+                            _ => { }
+                        }
+                    },
+                    MultiplierState::Digit => {
+                        result += machine.compute().unwrap_or(0);
+                    }
+                    _ => { }
+                }
+
                 machine.clear();
             },
-            // For all the other states we do nothing
-            _ => { },
         }
     }
 
@@ -283,5 +384,16 @@ mod tests {
     fn test_part1_no_valid() {
         let test = "xmul(2,4%&mul[3,7]!@^do_not_mul5,5)+mul(3264]then(ul(11,8)mul(85))";
         assert_eq!(parse(test), 0);
+    }
+
+    #[test]
+    fn test_part2() {
+        let test = "xmul(2,4)&mul[3,7]!^don't()_mul(5,5)+mul(32,64](mul(11,8)undo()?mul(8,5))";
+        assert_eq!(parse(test), 48);
+    }
+
+    #[test]
+    fn test_part2_all() {
+        assert_eq!(part_one(), Ok(83595109));
     }
 }
